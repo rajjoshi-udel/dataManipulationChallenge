@@ -862,7 +862,21 @@ print(f"\nOn-time delivery rate: {on_time_rate:.1f}%")
 
 #### Briefly Give Answers to the Discussion Questions In This Section
 
-> Replace this with your answers to the discussion questions
+** Answer to Question 1: Boolean Aggregation**
+
+```{python}
+#| echo: true
+
+#   clean_shipments.agg({
+#        'is_late': ['count', 'sum', 'mean']
+#   })
+
+print(f"Total shipments: {clean_shipments['is_late'].sum()}")
+
+print(f"Total late shipments: {clean_shipments.query('is_late == True').filter(['is_late']).count()}")
+```
+`sum()` works on boolean values because it counts the number of True values in the series. See above example using sum and query for late shipments's count. Both are same result.
+
 
 ### 6. Merge: Combining Information
 
@@ -901,7 +915,83 @@ print(shipments_with_category['prodCategory'].value_counts())
 
 #### Briefly Give Answers to the Discussion Questions In This Section
 
-> Replace this with your answers to the discussion questions
+** Answer to Question 1: Join Types and Data Loss**
+
+Using `how='left'` in most cases is because we want to keep all the data from the left dataframe and only add the data from the right dataframe if there is a match. If there is no match, the result will be `NaN`.
+```{python}
+# Compare different join types
+print("Understanding Join Types:\n")
+
+# Check sizes before merge
+print(f"clean_shipments rows: {len(clean_shipments)}")
+print(f"product_line_df rows: {len(product_line_df)}")
+print()
+
+# LEFT JOIN - Keep ALL shipments
+left_join = clean_shipments.merge(product_line_df, on='partID', how='left')
+print(f"LEFT JOIN:  {len(left_join)} rows (kept all shipments ✓)")
+
+# INNER JOIN - Only matching rows
+inner_join = clean_shipments.merge(product_line_df, on='partID', how='inner')
+print(f"INNER JOIN: {len(inner_join)} rows (lost {len(clean_shipments) - len(inner_join)} shipments ✗)")
+```
+
+**Why LEFT JOIN is better than INNER JOIN?**
+LEFT JOIN is better than INNER JOIN because it keeps all the data from the left dataframe and only adds the data from the right dataframe if there is a match. If there is no match, the result will be `NaN`.
+```{python}
+# Compare different join types
+print("Understanding Join Types:\n")
+
+# Check sizes before merge
+print(f"clean_shipments rows: {len(clean_shipments)}")
+print(f"product_line_df rows: {len(product_line_df)}")
+print()
+```
+
+** Answer to Question 2: Key Column Matching**
+```{python}
+#| echo: true
+
+# Check for duplicates in the product_line_df
+print("Checking for duplicate partIDs in product_line_df:\n")
+duplicate_count = product_line_df['partID'].duplicated().sum()
+print(f"Duplicate partIDs: {duplicate_count}")
+
+if duplicate_count > 0:
+    print("\n⚠️  WARNING: Duplicates found!")
+    print("This will create multiple rows for each shipment!")
+    
+    # Show an example
+    dup_parts = product_line_df[product_line_df['partID'].duplicated(keep=False)].sort_values('partID')
+    print("\nExample duplicates:")
+    print(dup_parts.head(10))
+else:
+    print("✓ No duplicates - each partID is unique")
+    print("This is good: 1-to-1 mapping between parts and categories")
+```
+
+**What happens with duplicates:**
+
+If `product_line_df` has duplicate `partID` values, the merge will create **multiple rows** for each shipment:
+
+```{python}
+# Example:
+#clean_shipments:         product_line_df:        Result after merge:
+#shipID  partID          partID  category         shipID  partID  category
+#10001   A123            A123    Electronics      10001   A123    Electronics
+#                        A123    Accessories      10001   A123    Accessories  <- Duplicate!
+```
+
+**Result:** 1 shipment becomes 2 rows! This inflates your data and ruins aggregations.
+
+**How to prevent:**
+```{python}
+# Remove duplicates before merge
+product_line_clean = product_line_df.drop_duplicates(subset=['partID'])
+
+# Or check first
+assert product_line_df['partID'].is_unique, "Duplicates found!"
+```
 
 ### 7. Split-Apply-Combine: Group Analysis
 
@@ -941,7 +1031,234 @@ print(service_by_category)
 
 #### Briefly Give Answers to the Discussion Questions In This Section
 
-> Replace this with your answers to the discussion questions
+
+** Answer to Question 1: GroupBy Mechanics**
+**What does `.groupby('prodCategory')` actually do? How does it "split" the data?**
+
+`.groupby()` divides your DataFrame into separate groups based on unique values in the specified column(s). see below example.
+
+```{python}
+#| echo: true
+
+# Let's see what groupby does step by step
+print("Understanding GroupBy:\n")
+
+# First, see what categories we have
+print("Unique product categories:")
+print(shipments_with_category['prodCategory'].value_counts())
+print()
+
+# When we groupby, it creates separate groups for each category
+grouped = shipments_with_category.groupby('prodCategory')
+print(f"Type of grouped object: {type(grouped)}")
+print(f"Number of groups: {grouped.ngroups}")
+print(f"Group names (keys): {list(grouped.groups.keys())}")
+print()
+
+# Look at one group
+print("="*60)
+print("Example: Looking at the 'Liquids' group")
+liquids_group = grouped.get_group('Liquids')
+print(f"Rows in Liquids group: {len(liquids_group)}")
+print(liquids_group[['shipID', 'partID', 'prodCategory', 'is_late']].head())
+```
+
+**How it "splits" the data:**
+
+1. **Identifies unique values** in the groupby column
+2. **Separates rows** into groups based on those values
+3. **Creates a GroupBy object** (not a DataFrame yet!)
+
+```{python}
+#| echo: true
+
+# Visual demonstration of the split
+print("\nVisual representation of how data is split:\n")
+
+for category, group in grouped:
+    print(f"{category}: {len(group)} rows")
+    print(f"  Late shipments: {group['is_late'].sum()}")
+    print(f"  On-time rate: {(1 - group['is_late'].mean()) * 100:.1f}%")
+    print()
+```
+
+**Think of it like this:**
+```
+Original DataFrame:          After .groupby('prodCategory'):
+shipID  prodCategory         
+10001   Liquids              Group 1: Liquids
+10002   Machines             ├─ All rows with 'Liquids'
+10003   Liquids              
+10004   Machines             Group 2: Machines
+10005   Liquids              ├─ All rows with 'Machines'
+                             
+                             Group 3: Marketables
+                             ├─ All rows with 'Marketables'
+                             
+                             Group 4: SpareParts
+                             ├─ All rows with 'SpareParts'
+```
+
+**Why do we need to use `.agg()` after grouping? What happens if you don't?**
+
+`.groupby()` alone just organizes the data - it doesn't calculate anything! You need `.agg()` to tell it WHAT to calculate for each group.
+
+```{python}
+#| echo: true
+
+print("Understanding why we need .agg():\n")
+
+# Step 1: Just groupby - creates a GroupBy object
+just_grouped = shipments_with_category.groupby('prodCategory')
+print(f"1. Just .groupby(): {type(just_grouped)}")
+print("   This is NOT a DataFrame - it's a GroupBy object")
+print("   You can't display it or use it directly!")
+print()
+
+# Step 2: Try to print it (won't show data)
+print(f"2. Trying to use just_grouped directly:")
+print(f"   {just_grouped}")
+print("   See? Just shows it's a GroupBy object, not the data!")
+print()
+
+# Step 3: Use .agg() to get actual results
+print(f"3. Using .agg() to calculate statistics:")
+with_agg = just_grouped.agg({
+    'is_late': ['count', 'sum', 'mean']
+})
+print(with_agg)
+print("\n   NOW we have a DataFrame with actual results!")
+```
+
+**What happens if you don't use `.agg()`?**
+
+```{python}
+#| echo: true
+
+print("\nOptions after .groupby():\n")
+
+grouped = shipments_with_category.groupby('prodCategory')
+
+# Option 1: Use specific aggregation methods directly
+print("Option 1: Direct aggregation methods")
+print(grouped['is_late'].sum())  # Works! Shortcut for .agg('sum')
+print()
+
+# Option 2: Use .agg() for multiple calculations
+print("Option 2: Use .agg() for complex aggregations")
+result = grouped.agg({
+    'is_late': ['count', 'sum', 'mean'],
+    'days_late': ['mean', 'max']
+})
+print(result)
+print()
+
+# Option 3: Try to use grouped object without aggregation
+print("Option 3: Try to print grouped object without aggregation")
+try:
+    print(grouped)  # Just shows the object type
+except Exception as e:
+    print(f"Error: {e}")
+```
+
+**Key Insights:**
+
+1. **`.groupby()` creates groups** but doesn't calculate anything
+2. **`.agg()` tells pandas WHAT to calculate** for each group
+3. **Without `.agg()`**, you have a GroupBy object (not usable data)
+4. **With `.agg()`**, you get a DataFrame with results
+
+
+
+**Common aggregation functions:**
+
+.agg('sum')      # Total
+.agg('mean')     # Average
+.agg('count')    # Count rows
+.agg('min')      # Minimum
+.agg('max')      # Maximum
+.agg(['sum', 'mean', 'count'])  # Multiple at once!
+
+
+** Answer to Question 2: Key Column Matching**
+
+**What does grouping by `['shipID', 'prodCategory']` do versus just `'prodCategory'`?**
+
+```{python}
+#| echo: true
+
+print("Comparing single vs multi-level grouping:\n")
+
+# Single-level: Group by prodCategory only
+single_group = (
+    shipments_with_category
+    .groupby('prodCategory')
+    .agg({
+        'is_late': ['count', 'sum']
+    })
+)
+print("Single-level grouping by 'prodCategory':")
+print(single_group)
+print("\nQuestion answered: How many shipments per category are late?")
+print()
+
+print("="*60)
+
+# Multi-level: Group by BOTH shipID and prodCategory
+multi_group = (
+    shipments_with_category
+    .groupby(['shipID', 'prodCategory'])
+    .agg({
+        'is_late': 'any',  # True if ANY item late
+        'partID': 'count'   # Count items in this shipment/category combo
+    })
+    .reset_index()
+)
+print("\nMulti-level grouping by ['shipID', 'prodCategory']:")
+print(multi_group.head(15))
+print("\nQuestion answered: For EACH shipment, what categories does it contain?")
+```
+
+**Key Difference:**
+
+**Single-level `['prodCategory']`:**
+- Groups ALL shipments by category
+- Answer: "How do categories perform overall?"
+
+**Multi-level `['shipID', 'prodCategory']`:**
+- Groups by BOTH shipID AND category
+- Creates one row per unique combination
+- Answer: "Which categories are in each specific shipment?"
+
+**Why is this useful?**
+```{python}
+#| echo: true
+
+print("\nWhy multi-level grouping matters:\n")
+
+# Use multi-level to find shipments with multiple categories
+multi_category_info = (
+    shipments_with_category
+    .groupby('shipID')
+    .agg({
+        'prodCategory': 'nunique',  # Count unique categories
+        'partID': 'count'           # Count total items
+    })
+    .reset_index()
+)
+
+# Find shipments with multiple categories
+multi_cat = multi_category_info[multi_category_info['prodCategory'] > 1]
+print(f"Shipments with multiple categories: {len(multi_cat)}")
+print(f"Percentage: {len(multi_cat) / len(multi_category_info) * 100:.1f}%")
+print("\nExamples:")
+print(multi_cat.head(10))
+```
+
+**Business Insight:**
+- Single-level: Category performance
+- Multi-level: Cross-category shopping behavior!
+
 
 ## Answering A Business Question
 
@@ -985,7 +1302,201 @@ print(f"Percentage with multiple categories: {multi_category_shipments['shipID']
 
 #### Briefly Give Answers to the Discussion Questions In This Section
 
-> Replace this with your answers to the discussion questions
+**What business question does this comprehensive analysis answer?**
+
+The comprehensive analysis answers: **"Do customers order products from multiple categories in a single shipment, and how common is this cross-category shopping behavior?"**
+
+```{python}
+#| echo: true
+
+print("Understanding the Business Question:\n")
+
+# The comprehensive analysis groups by BOTH shipID and prodCategory
+print("Step 1: Group by shipID and prodCategory")
+print(comprehensive_analysis[['shipID', 'prodCategory', 'is_late', 'has_multiple_categories']].head(5))
+print()
+
+# Key metric: How many shipments have multiple categories?
+multi_cat_shipments = comprehensive_analysis[comprehensive_analysis['has_multiple_categories']]
+total_shipments = comprehensive_analysis['shipID'].nunique()
+multi_cat_count = multi_cat_shipments['shipID'].nunique()
+
+print("="*60)
+print("BUSINESS QUESTION ANSWERED:")
+print("="*60)
+print(f"Total unique shipments: {total_shipments}")
+print(f"Shipments with multiple categories: {multi_cat_count}")
+print(f"Percentage: {multi_cat_count / total_shipments * 100:.1f}%")
+print()
+
+# Show examples of multi-category shipments
+print("Examples of multi-category shipments:")
+sample_multi = comprehensive_analysis[comprehensive_analysis['has_multiple_categories']].head(10)
+print(sample_multi[['shipID', 'prodCategory', 'is_late']])
+```
+
+**This answers critical business questions:**
+1. Are customers buying across product categories?
+2. How common is cross-category shopping?
+3. Do multi-category orders have different service levels i.e. Expedite service level?
+
+**How does grouping by `['shipID', 'prodCategory']` differ from grouping by just `'prodCategory'`?**
+
+```{python}
+#| echo: true
+
+print("\nComparing Single vs Multi-Column Grouping:\n")
+
+# Method 1: Group by 'prodCategory' only
+print("Method 1: Grouping by 'prodCategory' only")
+category_only = (
+    shipments_with_category
+    .groupby('prodCategory')
+    .agg({
+        'is_late': ['count', 'sum', 'mean']
+    })
+)
+print(category_only)
+print("\n📊 Answers: 'How many shipments are late per category?'")
+print("   Focus: Category-level performance")
+print(f"   Result: {len(category_only)} rows (one per category)")
+print()
+
+print("="*60)
+
+# Method 2: Group by BOTH ['shipID', 'prodCategory']
+print("\nMethod 2: Grouping by ['shipID', 'prodCategory']")
+shipment_and_category = (
+    shipments_with_category
+    .groupby(['shipID', 'prodCategory'])
+    .agg({
+        'is_late': 'any',
+        'partID': 'count'
+    })
+    .reset_index()
+    .head(20)
+)
+print(shipment_and_category)
+print("\n📊 Answers: 'What categories does EACH shipment contain?'")
+print("   Focus: Individual shipment composition")
+print(f"   Result: {len(comprehensive_analysis)} rows (one per shipment-category combo)")
+```
+
+**Key Differences:**
+
+| Aspect | Group by 'prodCategory' | Group by ['shipID', 'prodCategory'] |
+|--------|------------------------|-------------------------------------|
+| **Granularity** | Category level | Shipment-category level |
+| **Question** | "How do categories perform?" | "What's in each shipment?" |
+| **Rows** | 4 (one per category) | 1000+ (one per combo) |
+| **Use Case** | Category performance | Cross-shopping analysis |
+
+```{python}
+#| echo: true
+
+# Demonstrate the difference with a specific example
+print("\nConcrete Example:\n")
+
+# Pick one shipment with multiple categories
+sample_ship = comprehensive_analysis[
+    (comprehensive_analysis['has_multiple_categories']) & 
+    (comprehensive_analysis['shipID'] == comprehensive_analysis[comprehensive_analysis['has_multiple_categories']]['shipID'].iloc[0])
+]
+
+if len(sample_ship) > 0:
+    ship_id = sample_ship['shipID'].iloc[0]
+    print(f"Shipment {ship_id} contains:")
+    for _, row in sample_ship.iterrows():
+        print(f"  - {row['prodCategory']}: {'Late' if row['is_late'] else 'On-time'}")
+    print()
+    print("Single-level grouping would show:")
+    print("  'Liquids: X shipments, Y late'")
+    print()
+    print("Multi-level grouping shows:")
+    print(f"  'Shipment {ship_id} has Liquids AND Machines' (cross-category order!)")
+```
+
+**What insights can ZappTech's management gain from knowing the percentage of multi-category shipments?**
+
+```{python}
+#| echo: true
+
+print("\nBusiness Insights from Multi-Category Analysis:\n")
+
+# Calculate key metrics
+total_unique_shipments = comprehensive_analysis['shipID'].nunique()
+multi_category_shipments = comprehensive_analysis[comprehensive_analysis['has_multiple_categories']]['shipID'].nunique()
+percentage = multi_category_shipments / total_unique_shipments * 100
+
+print(f"📈 Key Metric: {percentage:.1f}% of shipments contain multiple categories")
+print()
+
+# Compare service levels
+multi_cat_late = comprehensive_analysis[
+    comprehensive_analysis['has_multiple_categories']
+]['is_late'].mean()
+
+single_cat_late = comprehensive_analysis[
+    ~comprehensive_analysis['has_multiple_categories']
+]['is_late'].mean()
+
+print("Service Level Comparison:")
+print(f"  Multi-category orders late rate: {multi_cat_late * 100:.1f}%")
+print(f"  Single-category orders late rate: {single_cat_late * 100:.1f}%")
+print()
+
+# Calculate revenue impact (assuming multi-category = higher value)
+print("="*60)
+print("MANAGEMENT INSIGHTS:")
+print("="*60)
+```
+
+**1. Cross-Selling Opportunity:**
+- 23.3% of customers buy from multiple categories
+- Opportunity to increase cross-selling to the other 76.7%
+- Product bundling strategies could boost average order value
+
+**2. Customer Segmentation:**
+- Multi-category buyers are more valuable customers
+- Different marketing/retention strategies needed
+- Target cross-category promotions to single-category buyers
+
+**3. Warehouse & Logistics Planning:**
+- 23% of orders require picking from multiple zones
+- May need different fulfillment strategies
+- Cross-category orders might have different complexity
+
+**4. Inventory Management:**
+- Need to stock complementary products together
+- Understand which categories are bought together
+- Optimize warehouse layout for common combinations
+
+**5. Service Level Strategy:**
+- Compare late rates: Multi-category vs single-category
+- May need different SLAs for complex orders
+- Resource allocation based on order complexity
+
+**6. Marketing Strategy:**
+```{python}
+# If 23% buy multi-category naturally:
+# - Promote bundles to increase this to 30-35%
+# - Study what triggers cross-category purchases
+# - Create "Complete the Set" campaigns
+```
+
+**7. Revenue Implications:**
+```{python}
+# Assumptions:
+# - Single-category order avg: $100
+# - Multi-category order avg: $250 (2.5x)
+
+single_cat_revenue = (total_unique_shipments * 0.767) * 100
+multi_cat_revenue = (total_unique_shipments * 0.233) * 250
+total_revenue = single_cat_revenue + multi_cat_revenue
+
+# If we increase multi-category from 23% to 30%:
+# Additional revenue = 7% of customers × $150 extra = significant!
+```
 
 ## Student Analysis Section: Mastering Data Manipulation {#student-analysis-section}
 
